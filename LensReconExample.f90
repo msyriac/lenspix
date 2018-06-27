@@ -221,6 +221,12 @@
             call HealpixAlm2Power(SimAlm,P)
             call HealpixPower_Write(P,trim(file_stem)//'_unlensed_simulated.dat')
 
+            ! Write phi map
+            call HealpixAlm2Map(H,SimAlm%Phi, M, npix,DoPhi=.true., DoT=.false.)
+            call HealpixMap_Write(M,trim(file_stem)//'_phi_map.fits',.true.,.true.) !overwrite=.true.,phi_map=.true.
+            call HealpixMap_nullify(M)
+            
+
             call HealpixAlm2GradientMap(H,SimAlm, GradPhi,H%npix,'PHI')
             call HealpixInterpLensedMap_GradPhi(H,SimAlm,GradPhi, M, interp_factor, interp_cyl)
 
@@ -239,6 +245,13 @@
         do i=1,lmax_phi
             PhiRecon%Phi(1,i,:) =  A%SpinEB(1,i,:) * AL(i) / sqrt(i*(i+1.))
         end do
+        print *, 'Writing recon map'
+        
+        call HealpixAlm2Map(H,PhiRecon, M, npix,DoPhi=.true., DoT=.false.)
+        call HealpixMap_Write(M,trim(file_stem)//'_phiTT_map.fits',.true.,.true.) !overwrite=.true.,phi_map=.true.
+        call HealpixMap_nullify(M)
+        
+        
         call HealpixAlm2Power(PhiRecon, P)
         call HealpixPower_write(P, trim(file_stem)//'recon_power.dat')
         if (associated(SimAlm%Phi)) then
