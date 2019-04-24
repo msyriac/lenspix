@@ -24,7 +24,7 @@
     xlc= 180*sqrt(8.*log(2.))/3.14159
     sigma2 = (noise_fwhm_deg/xlc)**2
     do l=0, lmax
-        Noise%Cl(l,1) = NoiseVar*exp(l*(l+1)*sigma2)
+        Noise%Cl(l,1) = 0 !NoiseVar*exp(l*(l+1)*sigma2)
     end do
 
     end subroutine NoiseInit
@@ -56,15 +56,15 @@
 
 
 
-    subroutine QuadraticPhi(H,A, MGradT, LensedCl, Noise, lminest,lmaxest)
+    subroutine QuadraticPhi(H,A, MGradT, LensedCl, Noise, lminest,lmaxest,lmax)
     Type(HealpixInfo)  :: H
     Type(HealpixPower) :: LensedCl, Noise
     Type(HealpixAlm) :: A, AOut , PhiSol
     Type(HealpixMap) :: MFilt, MGradT
-    integer l,lmaxest, lminest
+    integer l,lmaxest, lminest,lmax
 
     print *,'get quadratic', lminest, lmaxest
-    call HealpixAlm_Init(AOut, lmaxest,1)
+    call HealpixAlm_Init(AOut, lmax,1)
     AOut%TEB=0
     do l=max(2,lminest),lmaxest
         AOut%TEB(1,l,:) = A%TEB(1,l,:) / (LensedCl%Cl(l,1) + Noise%Cl(l,1))
@@ -75,6 +75,7 @@
         AOut%TEB(1,l,:) = Aout%TEB(1,l,:)  * LensedCl%Cl(l,1) 
     end do
     call HealpixAlm2GradientMap(H, AOut,MGradT,H%npix,'T')
+    
 
     MGradT%SpinField =  MGradT%SpinField * MFilt%TQU(:,1)
     call HealpixMap_Free(Mfilt)
@@ -94,7 +95,7 @@
     use Recon
     implicit none
     Type(HealpixInfo)  :: H
-    Type(HealpixMap)   :: M, GradPhi, MGradT
+    Type(HealpixMap)   :: M, GradPhi, MGradT, PhiMap
     Type(HealpixPower) :: UnlensedCl, LensedCl, Noise, P
     Type(HealpixAlm)   :: A,SimAlm,PhiRecon
 
@@ -113,6 +114,7 @@
     integer lmax_phi, lmax_est
     real(dp), allocatable :: AL(:)
     real(dp) Noisevar, noise_fwhm_deg
+    character(len=30) :: in_seed
 #ifdef MPIPIX
 
     call mpi_init(i)
@@ -125,7 +127,10 @@
         call mpi_finalize(i)
 #endif
         stop 'No ini'
-    end if
+     end if
+
+     
+     
     nside  = Ini_Read_Int('nside')
     npix = nside2npix(nside)
 
@@ -135,7 +140,8 @@
     out_file_root = Ini_Read_String('out_file_root')
 
     want_pol = Ini_Read_Logical('want_pol')
-    rand_seed = Ini_Read_Int('rand_seed')
+    rand_seed = StrToInt(GetParam(2))
+    !Ini_Read_Int('rand_seed')
 
     noiseVar = Ini_read_real('noise')/mK**2
     noise_fwhm_deg = Ini_read_real('noise_fwhm')/60
@@ -147,8 +153,8 @@
     Ini_Fail_On_Not_Found = .false.
 
     in_map = Ini_read_String('input_map')
-    if (in_map=='') in_map = 'lensed_sim_cache.fits'
-
+    !if (in_map=='') in_map = 'lensed_sim_cache.fits'
+    in_map = trim(file_stem)//'_lensed_'//trim(IntToStr(rand_seed))//'.fits' ! !!!!!
 
     w8name = Ini_Read_String('w8dir')
     interp_factor=0
@@ -198,7 +204,7 @@
         allocate(AL(lmax_phi))
         aname=trim(out_file_root)//'_AL.txt'
         if (.not. FileExists(aname)) then
-            call GetA_L(LensedCl, Noise, AL, lmax_phi, lmax)
+            call GetA_L(LensedCl, Noise, AL, lmax_phi, lmax_est)
             call CreateTxtFile(aname,1)
             do i=1, lmax_phi
                 write(1,*) i, AL(i)
@@ -219,12 +225,16 @@
         else
             call HealpixAlm_Sim(SimAlm, UnlensedCl, rand_seed,HasPhi=.true., dopol = want_pol)
             call HealpixAlm2Power(SimAlm,P)
-            call HealpixPower_Write(P,trim(file_stem)//'_unlensed_simulated.dat')
+            call HealpixPower_Write(P,trim(file_stem)//'_unlensed_simulated_'//trim(IntToStr(rand_seed))//'.dat')
+
+            call HealpixAlm2Map(H,SimAlm,PhiMap,H%npix,DoPhi=.true., DoT=.false.)
+            call HealpixMap_Write(PhiMap, trim(file_stem)//'_phimap_'//trim(IntToStr(rand_seed))//'.fits',.true.,.true.)
+            call HealpixMap_nullify(PhiMap)
 
             call HealpixAlm2GradientMap(H,SimAlm, GradPhi,H%npix,'PHI')
             call HealpixInterpLensedMap_GradPhi(H,SimAlm,GradPhi, M, interp_factor, interp_cyl)
 
-            call HealpixMap_Write(M, in_map)
+            call HealpixMap_Write(M, trim(file_stem)//'_lensed_'//trim(IntToStr(rand_seed))//'.fits',.true.)
         end if
 
         !Have simulated lensed map M
@@ -233,17 +243,22 @@
 
         call HealpixMap2Alm(H,M, A,lmax)
 
-        call QuadraticPhi(H,A, MGradT, LensedCl, Noise, 2,lmax)
+        call QuadraticPhi(H,A, MGradT, LensedCl, Noise, 2,lmax_est,lmax)
         call HealpixMap2Alm(H, MGradT, A,lmax_est)
         call HealpixAlm_Init(PhiRecon,lmax_phi,npol=0,HasPhi=.true.)
         do i=1,lmax_phi
             PhiRecon%Phi(1,i,:) =  A%SpinEB(1,i,:) * AL(i) / sqrt(i*(i+1.))
-        end do
+         end do
+
+         call HealpixAlm2Map(H,PhiRecon, M, npix,DoPhi=.true., DoT=.false.)
+        call HealpixMap_Write(M,trim(file_stem)//'_phiTT_map_'//trim(IntToStr(rand_seed))//'.fits',.true.,.true.) !overwrite=.true.,phi_map=.true.
+        call HealpixMap_nullify(M)
+         
         call HealpixAlm2Power(PhiRecon, P)
-        call HealpixPower_write(P, trim(file_stem)//'recon_power.dat')
+        call HealpixPower_write(P, trim(file_stem)//'recon_power_'//trim(IntToStr(rand_seed))//'.dat')
         if (associated(SimAlm%Phi)) then
             call HealpixAlm2CrossPhi(PhiRecon, SimAlm, P)
-            call HealpixPower_write(P, trim(file_stem)//'recon_cross_power.dat')
+            call HealpixPower_write(P, trim(file_stem)//'recon_cross_power_'//trim(IntToStr(rand_seed))//'.dat')
         end if
     end if
 
